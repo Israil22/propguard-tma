@@ -4,7 +4,7 @@ import './App.css'
 
 function App() {
   const [tgUser, setTgUser] = useState(null)
-  const [account, setAccount] = useState(null)
+  const [accounts, setAccounts] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [showConnect, setShowConnect] = useState(false)
@@ -29,27 +29,26 @@ function App() {
         setTgUser(tg.initDataUnsafe.user)
       }
     }
-    fetchAccount()
+    fetchAccounts()
   }, [])
 
-  // Загружаем последний подключенный счет из Supabase
-  async function fetchAccount() {
+  // Загружаем ВСЕ подключенные счета из Supabase
+  async function fetchAccounts() {
     setLoading(true)
     const { data, error } = await supabase
       .from('prop_accounts')
       .select('*')
       .order('created_at', { ascending: false })
-      .limit(1)
 
     if (error) {
       console.error('Ошибка загрузки:', error.message)
-    } else if (data && data.length > 0) {
-      setAccount(data[0])
+    } else if (data) {
+      setAccounts(data)
     }
     setLoading(false)
   }
 
-  // Сохраняем новый счет в Supabase
+  // Сохраняем новый счет и добавляем его в общий список
   async function handleSaveAccount(e) {
     e.preventDefault()
     setSaving(true)
@@ -62,7 +61,7 @@ function App() {
       .from('prop_accounts')
       .insert([
         {
-          user_id: crypto.randomUUID(), // Временный ID до подключения авторизации
+          user_id: crypto.randomUUID(),
           account_number: accountNum,
           firm_name: firmName,
           initial_balance: Number(initialBalance) || 100000,
@@ -77,7 +76,7 @@ function App() {
     if (error) {
       alert('Ошибка сохранения: ' + error.message)
     } else if (data && data.length > 0) {
-      setAccount(data[0])
+      setAccounts((prev) => [data[0], ...prev])
       setShowConnect(false)
       setLogin('')
       setPassword('')
@@ -99,38 +98,53 @@ function App() {
 
       {!showConnect ? (
         <>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
+              Активные счета ({accounts.length})
+            </h2>
+          </div>
+
           {loading ? (
             <p className="text-center text-gray-400 my-10">Загрузка данных из базы...</p>
-          ) : account ? (
-            <>
-              <div className="bg-gray-800/60 px-4 py-2 rounded-lg border border-gray-700 mb-4 flex justify-between items-center">
-                <span className="text-xs text-gray-400">Активный счет</span>
-                <span className="text-sm font-bold text-cyan-400">
-                  {account.firm_name} • {account.account_number}
-                </span>
-              </div>
+          ) : accounts.length > 0 ? (
+            <div className="space-y-4 mb-6">
+              {accounts.map((acc) => (
+                <div
+                  key={acc.id}
+                  className="bg-gray-800 p-4 rounded-xl border border-gray-700"
+                >
+                  <div className="flex justify-between items-center mb-3 pb-2 border-b border-gray-700">
+                    <span className="text-base font-bold text-cyan-400">
+                      {acc.firm_name} • {acc.account_number}
+                    </span>
+                    <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">
+                      Активен
+                    </span>
+                  </div>
 
-              <div className="grid grid-cols-2 gap-4 mb-6">
-                <div className="bg-gray-800 p-4 rounded-xl border border-gray-700">
-                  <p className="text-gray-400 text-xs uppercase tracking-wider mb-1">Баланс</p>
-                  <p className="text-xl font-bold text-white">
-                    \${Number(account.initial_balance).toLocaleString()}
-                  </p>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <p className="text-gray-400 text-xs mb-0.5">Баланс</p>
+                      <p className="text-sm font-bold text-white">
+                        ${Number(acc.initial_balance).toLocaleString()}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400 text-xs mb-0.5">Дневной PnL</p>
+                      <p className={`text-sm font-bold ${Number(acc.current_daily_pnl) < 0 ? 'text-red-500' : 'text-green-400'}`}>
+                        ${Number(acc.current_daily_pnl).toLocaleString()}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400 text-xs mb-0.5">Лимит/день</p>
+                      <p className="text-sm font-bold text-orange-400">
+                        -${Number(acc.max_daily_loss).toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
                 </div>
-                <div className="bg-gray-800 p-4 rounded-xl border border-gray-700">
-                  <p className="text-gray-400 text-xs uppercase tracking-wider mb-1">Дневной PnL</p>
-                  <p className={`text-xl font-bold ${Number(account.current_daily_pnl) < 0 ? 'text-red-500' : 'text-green-400'}`}>
-                    \${Number(account.current_daily_pnl).toLocaleString()}
-                  </p>
-                </div>
-                <div className="bg-gray-800 p-4 rounded-xl border border-gray-700 col-span-2">
-                  <p className="text-gray-400 text-xs uppercase tracking-wider mb-1">Лимит дневной просадки</p>
-                  <p className="text-lg font-bold text-orange-400">
-                    -\${Number(account.max_daily_loss).toLocaleString()}
-                  </p>
-                </div>
-              </div>
-            </>
+              ))}
+            </div>
           ) : (
             <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 text-center mb-6">
               <p className="text-gray-400 text-sm">Нет подключенных счетов</p>
@@ -141,7 +155,7 @@ function App() {
             onClick={() => setShowConnect(true)}
             className="w-full bg-cyan-600 active:bg-cyan-700 text-white font-bold py-3 rounded-xl transition-colors shadow-lg shadow-cyan-600/20"
           >
-            {account ? '+ Подключить другой счет' : 'Подключить торговый счет'}
+            + Подключить торговый счет
           </button>
         </>
       ) : (
@@ -151,7 +165,6 @@ function App() {
             <button type="button" onClick={() => setShowConnect(false)} className="text-gray-400 text-xl">&times;</button>
           </div>
 
-          {/* Общие параметры пропа */}
           <div className="grid grid-cols-2 gap-3 mb-4">
             <div className="col-span-2">
               <label className="block text-xs text-gray-400 mb-1">Проп-фирма</label>
@@ -167,7 +180,7 @@ function App() {
               </select>
             </div>
             <div>
-              <label className="block text-xs text-gray-400 mb-1">Баланс (\$)</label>
+              <label className="block text-xs text-gray-400 mb-1">Баланс ($)</label>
               <input
                 type="number"
                 value={initialBalance}
@@ -177,7 +190,7 @@ function App() {
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-400 mb-1">Макс. просадка/день (\$)</label>
+              <label className="block text-xs text-gray-400 mb-1">Макс. просадка/день ($)</label>
               <input
                 type="number"
                 value={maxDailyLoss}
@@ -188,7 +201,6 @@ function App() {
             </div>
           </div>
 
-          {/* Переключатель методов */}
           <div className="flex bg-gray-900 rounded-lg p-1 mb-4">
             <button
               type="button"
@@ -268,7 +280,7 @@ function App() {
             </div>
           )}
 
-         <button
+          <button
             type="submit"
             disabled={saving}
             className="w-full mt-6 bg-orange-500 active:bg-orange-600 disabled:bg-gray-600 text-white font-bold py-3 rounded-xl transition-colors"
