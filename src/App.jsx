@@ -40,7 +40,8 @@ function App() {
   const [authSubmitting, setAuthSubmitting] = useState(false)
 
   // Вкладки и счета
-  const [activeTab, setActiveTab] = useState('accounts') // 'accounts' | 'history' | 'news'
+  const [activeTab, setActiveTab] = useState('accounts') // 'accounts' | 'news'
+  const [showArchive, setShowArchive] = useState(false)
   const [accounts, setAccounts] = useState([])
   const [tradesByAccount, setTradesByAccount] = useState({})
   const [expandedAccountId, setExpandedAccountId] = useState(null)
@@ -74,7 +75,6 @@ function App() {
 
   const currentUserId = tgUser ? `tg_${tgUser.id}` : webUser ? webUser.id : null
 
-  // Разделяем счета на активные и архивные
   const activeAccounts = accounts.filter((acc) => !acc.status || acc.status === 'active')
   const archivedAccounts = accounts.filter((acc) => acc.status && acc.status !== 'active')
 
@@ -141,7 +141,6 @@ function App() {
 
     if (data) {
       const today = getLocalDateString()
-      // Сбрасываем день только для активных счетов
       const accountsToReset = data.filter(
         (acc) => (!acc.status || acc.status === 'active') && acc.last_reset_date !== today
       )
@@ -450,20 +449,7 @@ function App() {
               : 'text-gray-400 hover:text-white'
           }`}
         >
-          Счета ({activeAccounts.length})
-        </button>
-        <button
-          onClick={() => {
-            setActiveTab('history')
-            setShowConnect(false)
-          }}
-          className={`flex-1 py-2 text-sm font-bold rounded-lg transition-colors ${
-            activeTab === 'history'
-              ? 'bg-cyan-600 text-white'
-              : 'text-gray-400 hover:text-white'
-          }`}
-        >
-          История ({archivedAccounts.length})
+          Счета
         </button>
         <button
           onClick={() => {
@@ -482,120 +468,6 @@ function App() {
 
       {activeTab === 'news' ? (
         <NewsCalendar />
-      ) : activeTab === 'history' ? (
-        <div>
-          <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">
-            История проп-счетов ({archivedAccounts.length})
-          </h2>
-
-          {archivedAccounts.length === 0 ? (
-            <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 text-center">
-              <p className="text-gray-400 text-sm">В истории пока нет завершённых или слитых счетов</p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {archivedAccounts.map((acc) => {
-                const accTrades = tradesByAccount[acc.id] || []
-                const totalPnl = accTrades.reduce((sum, t) => sum + Number(t.pnl || 0), 0)
-                const isPassed = acc.status === 'passed'
-
-                return (
-                  <div
-                    key={acc.id}
-                    className="bg-gray-800/80 p-4 rounded-xl border border-gray-700"
-                  >
-                    <div className="flex justify-between items-center mb-3 pb-2 border-b border-gray-700">
-                      <span className="text-base font-bold text-gray-200">
-                        {acc.firm_name} • {acc.account_number}
-                      </span>
-                      <span
-                        className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
-                          isPassed
-                            ? 'bg-green-500/20 text-green-400'
-                            : 'bg-red-500/20 text-red-400'
-                        }`}
-                      >
-                        {isPassed ? 'ПРОЙДЕН' : 'СЛИТ'}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2 mb-3">
-                      <div>
-                        <p className="text-gray-400 text-xs mb-0.5">Баланс</p>
-                        <p className="text-sm font-bold text-gray-200">
-                          ${Number(acc.initial_balance).toLocaleString()}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-gray-400 text-xs mb-0.5">Итог сделок</p>
-                        <p className={`text-sm font-bold ${totalPnl < 0 ? 'text-red-400' : 'text-green-400'}`}>
-                          {totalPnl > 0 ? '+' : ''}${totalPnl.toLocaleString()}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-gray-400 text-xs mb-0.5">Лимит/день</p>
-                        <p className="text-sm font-bold text-gray-400">
-                          -${Number(acc.max_daily_loss).toLocaleString()}
-                        </p>
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={() =>
-                        setExpandedAccountId(expandedAccountId === acc.id ? null : acc.id)
-                      }
-                      className="w-full bg-gray-900 hover:bg-gray-700 border border-gray-700 text-gray-300 text-xs font-semibold py-2 rounded-lg transition-colors"
-                    >
-                      Сделки счёта ({accTrades.length})
-                    </button>
-
-                    {expandedAccountId === acc.id && (
-                      <div className="mt-3 pt-3 border-t border-gray-700 space-y-2">
-                        {accTrades.length === 0 ? (
-                          <p className="text-xs text-gray-500 text-center py-2">
-                            Сделок не было
-                          </p>
-                        ) : (
-                          accTrades.map((t) => (
-                            <div
-                              key={t.id}
-                              className="flex justify-between items-center bg-gray-900/70 p-2.5 rounded-lg text-xs"
-                            >
-                              <div>
-                                <div className="flex items-center gap-2">
-                                  <span className="font-bold text-white">{t.symbol}</span>
-                                  <span
-                                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                                      t.direction === 'LONG'
-                                        ? 'bg-green-500/20 text-green-400'
-                                        : 'bg-red-500/20 text-red-400'
-                                    }`}
-                                  >
-                                    {t.direction}
-                                  </span>
-                                </div>
-                                {t.note && (
-                                  <p className="text-gray-400 text-[11px] mt-0.5">{t.note}</p>
-                                )}
-                              </div>
-                              <span
-                                className={`font-bold text-sm ${
-                                  Number(t.pnl) < 0 ? 'text-red-400' : 'text-green-400'
-                                }`}
-                              >
-                                {Number(t.pnl) > 0 ? '+' : ''}${Number(t.pnl).toLocaleString()}
-                              </span>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
       ) : !showConnect ? (
         <>
           <div className="flex justify-between items-center mb-4">
@@ -788,12 +660,134 @@ function App() {
             </div>
           )}
 
-          <button
-            onClick={() => setShowConnect(true)}
-            className="w-full bg-cyan-600 active:bg-cyan-700 text-white font-bold py-3 rounded-xl transition-colors shadow-lg shadow-cyan-600/20"
-          >
-            + Подключить торговый счет
-          </button>
+          {/* Нижние кнопки: Подключить счет + История проп-счетов */}
+          <div className="space-y-3">
+            <button
+              onClick={() => setShowConnect(true)}
+              className="w-full bg-cyan-600 active:bg-cyan-700 text-white font-bold py-3 rounded-xl transition-colors shadow-lg shadow-cyan-600/20"
+            >
+              + Подключить торговый счет
+            </button>
+
+            <button
+              onClick={() => setShowArchive(!showArchive)}
+              className="w-full bg-gray-800 hover:bg-gray-750 border border-gray-700 text-gray-300 font-semibold py-2.5 rounded-xl text-sm transition-colors flex justify-between items-center px-4"
+            >
+              <span>История проп-счетов ({archivedAccounts.length})</span>
+              <span className="text-xs text-gray-400">{showArchive ? '▲ Скрыть' : '▼ Показать'}</span>
+            </button>
+          </div>
+
+          {/* Раскрывающийся архив слитых/пройденных счетов */}
+          {showArchive && (
+            <div className="mt-4 space-y-3">
+              {archivedAccounts.length === 0 ? (
+                <div className="bg-gray-800/60 p-4 rounded-xl border border-gray-700 text-center">
+                  <p className="text-gray-400 text-xs">В истории пока нет завершённых или слитых счетов</p>
+                </div>
+              ) : (
+                archivedAccounts.map((acc) => {
+                  const accTrades = tradesByAccount[acc.id] || []
+                  const totalPnl = accTrades.reduce((sum, t) => sum + Number(t.pnl || 0), 0)
+                  const isPassed = acc.status === 'passed'
+
+                  return (
+                    <div
+                      key={acc.id}
+                      className="bg-gray-800/70 p-4 rounded-xl border border-gray-700"
+                    >
+                      <div className="flex justify-between items-center mb-3 pb-2 border-b border-gray-700">
+                        <span className="text-sm font-bold text-gray-200">
+                          {acc.firm_name} • {acc.account_number}
+                        </span>
+                        <span
+                          className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
+                            isPassed
+                              ? 'bg-green-500/20 text-green-400'
+                              : 'bg-red-500/20 text-red-400'
+                          }`}
+                        >
+                          {isPassed ? 'ПРОЙДЕН' : 'СЛИТ'}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2 mb-3">
+                        <div>
+                          <p className="text-gray-400 text-xs mb-0.5">Баланс</p>
+                          <p className="text-sm font-bold text-gray-200">
+                            ${Number(acc.initial_balance).toLocaleString()}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-gray-400 text-xs mb-0.5">Итог сделок</p>
+                          <p className={`text-sm font-bold ${totalPnl < 0 ? 'text-red-400' : 'text-green-400'}`}>
+                            {totalPnl > 0 ? '+' : ''}${totalPnl.toLocaleString()}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-gray-400 text-xs mb-0.5">Лимит/день</p>
+                          <p className="text-sm font-bold text-gray-400">
+                            -${Number(acc.max_daily_loss).toLocaleString()}
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() =>
+                          setExpandedAccountId(expandedAccountId === acc.id ? null : acc.id)
+                        }
+                        className="w-full bg-gray-900 hover:bg-gray-700 border border-gray-700 text-gray-300 text-xs font-semibold py-2 rounded-lg transition-colors"
+                      >
+                        Сделки счёта ({accTrades.length})
+                      </button>
+
+                      {expandedAccountId === acc.id && (
+                        <div className="mt-3 pt-3 border-t border-gray-700 space-y-2">
+                          {accTrades.length === 0 ? (
+                            <p className="text-xs text-gray-500 text-center py-2">
+                              Сделок не было
+                            </p>
+                          ) : (
+                            accTrades.map((t) => (
+                              <div
+                                key={t.id}
+                                className="flex justify-between items-center bg-gray-900/70 p-2.5 rounded-lg text-xs"
+                              >
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-bold text-white">{t.symbol}</span>
+                                    <span
+                                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                        t.direction === 'LONG'
+                                          ? 'bg-green-500/20 text-green-400'
+                                          : 'bg-red-500/20 text-red-400'
+                                      }`}
+                                    >
+                                      {t.direction}
+                                    </span>
+                                  </div>
+                                  {t.note && (
+                                    <p className="text-gray-400 text-[11px] mt-0.5">{t.note}</p>
+                                  )}
+                                </div>
+                                <span
+                                  className={`font-bold text-sm ${
+                                    Number(t.pnl) < 0 ? 'text-red-400' : 'text-green-400'
+                                  }`}
+                                >
+                                  {Number(t.pnl) > 0 ? '+' : ''}${Number(t.pnl).toLocaleString()}
+                                </span>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })
+              )}
+            </div>
+          )}
         </>
       ) : (
         <form onSubmit={handleSaveAccount} className="bg-gray-800 p-5 rounded-xl border border-gray-700">
@@ -956,7 +950,7 @@ function App() {
               </button>
             </div>
             <p className="text-xs text-gray-400 mb-4">
-              Счёт <span className="text-white font-semibold">{archiveModalAccount.firm_name} • {archiveModalAccount.account_number}</span> уйдёт с главного экрана и навсегда сохранится во вкладке «История». Выберите итог:
+              Счёт <span className="text-white font-semibold">{archiveModalAccount.firm_name} • {archiveModalAccount.account_number}</span> уйдёт из активных и навсегда сохранится в блоке «История проп-счетов» внизу. Выберите итог:
             </p>
             <div className="flex gap-2">
               <button
