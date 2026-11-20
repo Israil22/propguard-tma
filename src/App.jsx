@@ -12,6 +12,7 @@ function App() {
 
   // Поля формы
   const [firmName, setFirmName] = useState('FTMO')
+  const [customFirmName, setCustomFirmName] = useState('')
   const [initialBalance, setInitialBalance] = useState('100000')
   const [maxDailyLoss, setMaxDailyLoss] = useState('5000')
   const [login, setLogin] = useState('')
@@ -53,8 +54,12 @@ function App() {
     e.preventDefault()
     setSaving(true)
 
+    const finalFirmName = firmName === 'custom'
+      ? (customFirmName.trim() || 'Другая фирма')
+      : firmName
+
     const accountNum = connectMethod === 'credentials'
-      ? (login.trim() || `${firmName}-MT5`)
+      ? (login.trim() || `${finalFirmName}-MT5`)
       : `${platform}-${apiKey.slice(0, 6) || 'API'}`
 
     const { data, error } = await supabase
@@ -63,7 +68,7 @@ function App() {
         {
           user_id: crypto.randomUUID(),
           account_number: accountNum,
-          firm_name: firmName,
+          firm_name: finalFirmName,
           initial_balance: Number(initialBalance) || 100000,
           max_daily_loss: Number(maxDailyLoss) || 5000,
           current_daily_pnl: 0
@@ -78,6 +83,7 @@ function App() {
     } else if (data && data.length > 0) {
       setAccounts((prev) => [data[0], ...prev])
       setShowConnect(false)
+      setCustomFirmName('')
       setLogin('')
       setPassword('')
       setApiKey('')
@@ -166,7 +172,7 @@ function App() {
           </div>
 
           <div className="grid grid-cols-2 gap-3 mb-4">
-            <div className="col-span-2">
+           <div className="col-span-2">
               <label className="block text-xs text-gray-400 mb-1">Проп-фирма</label>
               <select
                 value={firmName}
