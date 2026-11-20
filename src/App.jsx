@@ -4,13 +4,24 @@ import './App.css'
 
 function App() {
   const [tgUser, setTgUser] = useState(null)
+  const [webUser, setWebUser] = useState(null)
+  const [authLoading, setAuthLoading] = useState(true)
+
+  // Состояния формы входа/регистрации
+  const [isSignUp, setIsSignUp] = useState(false)
+  const [email, setEmail] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [authError, setAuthError] = useState('')
+  const [authSubmitting, setAuthSubmitting] = useState(false)
+
+  // Состояния дашборда
   const [accounts, setAccounts] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [showConnect, setShowConnect] = useState(false)
   const [connectMethod, setConnectMethod] = useState('credentials')
 
-  // Поля формы
+  // Поля формы подключения счета
   const [firmName, setFirmName] = useState('FTMO')
   const [customFirmName, setCustomFirmName] = useState('')
   const [initialBalance, setInitialBalance] = useState('100000')
@@ -21,23 +32,48 @@ function App() {
   const [platform, setPlatform] = useState('cTrader')
   const [apiKey, setApiKey] = useState('')
 
+  // Определяем единый ID текущего пользователя (Telegram или Web)
+  const currentUserId = tgUser ? `tg_${tgUser.id}` : webUser ? webUser.id : null
+
   useEffect(() => {
-    if (window.Telegram?.WebApp) {
-      const tg = window.Telegram.WebApp
+    // 1. Проверяем, открыто ли приложение внутри Telegram
+    const tg = window.Telegram?.WebApp
+    if (tg?.initDataUnsafe?.user) {
       tg.ready()
       tg.expand()
-      if (tg.initDataUnsafe?.user) {
-        setTgUser(tg.initDataUnsafe.user)
-      }
+      setTgUser(tg.initDataUnsafe.user)
+      setAuthLoading(false)
+      return
     }
-    fetchAccounts()
+
+    // 2. Если это обычный браузер — проверяем сессию Supabase Auth
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setWebUser(session?.user ?? null)
+      setAuthLoading(false)
+    })
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setWebUser(session?.user ?? null)
+    })
+
+    return () => subscription.unsubscribe()
   }, [])
 
-  async function fetchAccounts() {
+  // Загружаем счета, как только определился пользователь
+  useEffect(() => {
+    if (currentUserId) {
+      fetchAccounts(currentUserId)
+    } else {
+      setAccounts([])
+    }
+  }, [currentUserId])
+
+  async function fetchAccounts(uid) {
     setLoading(true)
     const { data, error } = await supabase
       .from('prop_accounts')
       .select('*')
+      .eq('user_id', uid)
       .order('created_at', { ascending: false })
 
     if (error) {
@@ -48,8 +84,37 @@ function App() {
     setLoading(false)
   }
 
+  // Вход или регистрация для веб-версии
+  async function handleAuth(e) {
+    e.preventDefault()
+    setAuthError('')
+    setAuthSubmitting(true)
+
+    if (isSignUp) {
+      const { error } = await supabase.auth.signUp({
+        email,
+        password: authPassword
+      })
+      if (error) setAuthError(error.message)
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password: authPassword
+      })
+      if (error) setAuthError('Неверный email или пароль')
+    }
+
+    setAuthSubmitting(false)
+  }
+
+  async function handleLogout() {
+    await supabase.auth.signOut()
+    setAccounts([])
+  }
+
   async function handleSaveAccount(e) {
     e.preventDefault()
+    if (!currentUserId) return
     setSaving(true)
 
     const finalFirmName = firmName === 'custom'
@@ -64,7 +129,7 @@ function App() {
       .from('prop_accounts')
       .insert([
         {
-          user_id: crypto.randomUUID(),
+          user_id: currentUserId,
           account_number: accountNum,
           firm_name: finalFirmName,
           initial_balance: Number(initialBalance) || 100000,
@@ -88,15 +153,103 @@ function App() {
     }
   }
 
+  // Экран загрузки при старте
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center font-sans">
+        <p className="text-gray-400">Загрузка PropGuard...</p>
+      </div>
+    )
+  }
+
+  // Экран входа/регистрации для обычного браузера (если не авторизован)
+  if (!currentUserId) {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4 font-sans">
+        <div className="w-full max-w-md bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
+          <h1 className="text-3xl font-bold text-orange-500 text-center mb-2">PropGuard</h1>
+          <p className="text-gray-400 text-sm text-center mb-6">
+            {isSignUp ? 'Создайте аккаунт трейдера' : 'Войдите в свой дашборд'}
+          </p>
+
+          <form onSubmit={handleAuth} className="space-y-4">
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Email</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="trader@example.com"
+                required
+                className="w-full bg-gray-900 border border-gray-700 rounded-lg p-3 text-white text-sm outline-none focus:border-cyan-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Пароль</label>
+              <input
+                type="password"
+                value={authPassword}
+                onChange={(e) => setAuthPassword(e.target.value)}
+                placeholder="Минимум 6 символов"
+                minLength={6}
+                required
+                className="w-full bg-gray-900 border border-gray-700 rounded-lg p-3 text-white text-sm outline-none focus:border-cyan-500"
+              />
+            </div>
+
+            {authError && (
+              <p className="text-red-400 text-xs bg-red-500/10 border border-red-500/30 p-2 rounded-lg">
+                {authError}
+              </p>
+            )}
+
+            <button
+              type="submit"
+              disabled={authSubmitting}
+              className="w-full bg-orange-500 hover:bg-orange-600 disabled:bg-gray-600 text-white font-bold py-3 rounded-xl transition-colors"
+            >
+              {authSubmitting ? 'Подождите...' : isSignUp ? 'Зарегистрироваться' : 'Войти'}
+            </button>
+          </form>
+
+          <div className="mt-5 text-center">
+            <button
+              type="button"
+              onClick={() => {
+                setIsSignUp(!isSignUp)
+                setAuthError('')
+              }}
+              className="text-sm text-cyan-400 hover:underline"
+            >
+              {isSignUp ? 'Уже есть аккаунт? Войти' : 'Нет аккаунта? Зарегистрироваться'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Основной дашборд (для авторизованных в Web или Telegram)
   return (
     <div className="p-4 bg-gray-900 min-h-screen text-white font-sans">
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-2xl font-bold text-orange-500">PropGuard</h1>
-        <div className="text-right">
-          <p className="text-xs text-gray-400">Трейдер</p>
-          <p className="text-sm font-semibold text-cyan-400">
-            {tgUser ? tgUser.first_name : 'Веб-версия'}
-          </p>
+        <div className="flex items-center gap-3">
+          <div className="text-right">
+            <p className="text-xs text-gray-400">Трейдер</p>
+            <p className="text-sm font-semibold text-cyan-400">
+              {tgUser ? tgUser.first_name : webUser?.email?.split('@')[0]}
+            </p>
+          </div>
+          {!tgUser && (
+            <button
+              onClick={handleLogout}
+              className="text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700 px-3 py-1.5 rounded-lg text-gray-300"
+            >
+              Выйти
+            </button>
+          )}
         </div>
       </div>
 
@@ -104,12 +257,12 @@ function App() {
         <>
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
-              Активные счета ({accounts.length})
+              Мои активные счета ({accounts.length})
             </h2>
           </div>
 
           {loading ? (
-            <p className="text-center text-gray-400 my-10">Загрузка данных из базы...</p>
+            <p className="text-center text-gray-400 my-10">Загрузка ваших счетов...</p>
           ) : accounts.length > 0 ? (
             <div className="space-y-4 mb-6">
               {accounts.map((acc) => (
@@ -151,7 +304,7 @@ function App() {
             </div>
           ) : (
             <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 text-center mb-6">
-              <p className="text-gray-400 text-sm">Нет подключенных счетов</p>
+              <p className="text-gray-400 text-sm">У вас пока нет подключенных счетов</p>
             </div>
           )}
 
