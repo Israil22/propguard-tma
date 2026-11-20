@@ -39,7 +39,8 @@ function App() {
   const [authError, setAuthError] = useState('')
   const [authSubmitting, setAuthSubmitting] = useState(false)
 
-  // Счета и сделки
+  // Вкладки и счета
+  const [activeTab, setActiveTab] = useState('accounts') // 'accounts' | 'history' | 'news'
   const [accounts, setAccounts] = useState([])
   const [tradesByAccount, setTradesByAccount] = useState({})
   const [expandedAccountId, setExpandedAccountId] = useState(null)
@@ -47,7 +48,10 @@ function App() {
   const [saving, setSaving] = useState(false)
   const [showConnect, setShowConnect] = useState(false)
   const [connectMethod, setConnectMethod] = useState('credentials')
-  const [activeTab, setActiveTab] = useState('accounts')
+
+  // Модалка архивации счета (Слит / Пройден)
+  const [archiveModalAccount, setArchiveModalAccount] = useState(null)
+  const [archiving, setArchiving] = useState(false)
 
   // Форма добавления сделки
   const [tradeModalAccount, setTradeModalAccount] = useState(null)
@@ -69,6 +73,10 @@ function App() {
   const [apiKey, setApiKey] = useState('')
 
   const currentUserId = tgUser ? `tg_${tgUser.id}` : webUser ? webUser.id : null
+
+  // Разделяем счета на активные и архивные
+  const activeAccounts = accounts.filter((acc) => !acc.status || acc.status === 'active')
+  const archivedAccounts = accounts.filter((acc) => acc.status && acc.status !== 'active')
 
   useEffect(() => {
     const tg = window.Telegram?.WebApp
@@ -133,9 +141,11 @@ function App() {
 
     if (data) {
       const today = getLocalDateString()
-      const accountsToReset = data.filter((acc) => acc.last_reset_date !== today)
+      // Сбрасываем день только для активных счетов
+      const accountsToReset = data.filter(
+        (acc) => (!acc.status || acc.status === 'active') && acc.last_reset_date !== today
+      )
 
-      // Сбрасываем дневной PnL и блокировку для счетов, у которых наступил новый день
       if (accountsToReset.length > 0) {
         const idsToReset = accountsToReset.map((a) => a.id)
         await supabase
@@ -149,7 +159,7 @@ function App() {
       }
 
       const normalizedAccounts = data.map((acc) =>
-        acc.last_reset_date !== today
+        (!acc.status || acc.status === 'active') && acc.last_reset_date !== today
           ? { ...acc, current_daily_pnl: 0, is_locked: false, last_reset_date: today }
           : acc
       )
@@ -224,6 +234,7 @@ function App() {
           max_daily_loss: Number(maxDailyLoss) || 5000,
           current_daily_pnl: 0,
           is_locked: false,
+          status: 'active',
           last_reset_date: getLocalDateString()
         }
       ])
@@ -241,6 +252,30 @@ function App() {
       setPassword('')
       setApiKey('')
     }
+  }
+
+  async function handleArchiveAccount(newStatus) {
+    if (!archiveModalAccount) return
+    setArchiving(true)
+
+    const { error } = await supabase
+      .from('prop_accounts')
+      .update({ status: newStatus, is_locked: true })
+      .eq('id', archiveModalAccount.id)
+
+    if (error) {
+      alert('Ошибка переноса в историю: ' + error.message)
+    } else {
+      setAccounts((prev) =>
+        prev.map((acc) =>
+          acc.id === archiveModalAccount.id
+            ? { ...acc, status: newStatus, is_locked: true }
+            : acc
+        )
+      )
+      setArchiveModalAccount(null)
+    }
+    setArchiving(false)
   }
 
   async function handleSaveTrade(e) {
@@ -415,7 +450,20 @@ function App() {
               : 'text-gray-400 hover:text-white'
           }`}
         >
-          Счета
+          Счета ({activeAccounts.length})
+        </button>
+        <button
+          onClick={() => {
+            setActiveTab('history')
+            setShowConnect(false)
+          }}
+          className={`flex-1 py-2 text-sm font-bold rounded-lg transition-colors ${
+            activeTab === 'history'
+              ? 'bg-cyan-600 text-white'
+              : 'text-gray-400 hover:text-white'
+          }`}
+        >
+          История ({archivedAccounts.length})
         </button>
         <button
           onClick={() => {
@@ -434,11 +482,125 @@ function App() {
 
       {activeTab === 'news' ? (
         <NewsCalendar />
+      ) : activeTab === 'history' ? (
+        <div>
+          <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">
+            История проп-счетов ({archivedAccounts.length})
+          </h2>
+
+          {archivedAccounts.length === 0 ? (
+            <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 text-center">
+              <p className="text-gray-400 text-sm">В истории пока нет завершённых или слитых счетов</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {archivedAccounts.map((acc) => {
+                const accTrades = tradesByAccount[acc.id] || []
+                const totalPnl = accTrades.reduce((sum, t) => sum + Number(t.pnl || 0), 0)
+                const isPassed = acc.status === 'passed'
+
+                return (
+                  <div
+                    key={acc.id}
+                    className="bg-gray-800/80 p-4 rounded-xl border border-gray-700"
+                  >
+                    <div className="flex justify-between items-center mb-3 pb-2 border-b border-gray-700">
+                      <span className="text-base font-bold text-gray-200">
+                        {acc.firm_name} • {acc.account_number}
+                      </span>
+                      <span
+                        className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
+                          isPassed
+                            ? 'bg-green-500/20 text-green-400'
+                            : 'bg-red-500/20 text-red-400'
+                        }`}
+                      >
+                        {isPassed ? 'ПРОЙДЕН' : 'СЛИТ'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 mb-3">
+                      <div>
+                        <p className="text-gray-400 text-xs mb-0.5">Баланс</p>
+                        <p className="text-sm font-bold text-gray-200">
+                          ${Number(acc.initial_balance).toLocaleString()}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-gray-400 text-xs mb-0.5">Итог сделок</p>
+                        <p className={`text-sm font-bold ${totalPnl < 0 ? 'text-red-400' : 'text-green-400'}`}>
+                          {totalPnl > 0 ? '+' : ''}${totalPnl.toLocaleString()}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-gray-400 text-xs mb-0.5">Лимит/день</p>
+                        <p className="text-sm font-bold text-gray-400">
+                          -${Number(acc.max_daily_loss).toLocaleString()}
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() =>
+                        setExpandedAccountId(expandedAccountId === acc.id ? null : acc.id)
+                      }
+                      className="w-full bg-gray-900 hover:bg-gray-700 border border-gray-700 text-gray-300 text-xs font-semibold py-2 rounded-lg transition-colors"
+                    >
+                      Сделки счёта ({accTrades.length})
+                    </button>
+
+                    {expandedAccountId === acc.id && (
+                      <div className="mt-3 pt-3 border-t border-gray-700 space-y-2">
+                        {accTrades.length === 0 ? (
+                          <p className="text-xs text-gray-500 text-center py-2">
+                            Сделок не было
+                          </p>
+                        ) : (
+                          accTrades.map((t) => (
+                            <div
+                              key={t.id}
+                              className="flex justify-between items-center bg-gray-900/70 p-2.5 rounded-lg text-xs"
+                            >
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-white">{t.symbol}</span>
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                      t.direction === 'LONG'
+                                        ? 'bg-green-500/20 text-green-400'
+                                        : 'bg-red-500/20 text-red-400'
+                                    }`}
+                                  >
+                                    {t.direction}
+                                  </span>
+                                </div>
+                                {t.note && (
+                                  <p className="text-gray-400 text-[11px] mt-0.5">{t.note}</p>
+                                )}
+                              </div>
+                              <span
+                                className={`font-bold text-sm ${
+                                  Number(t.pnl) < 0 ? 'text-red-400' : 'text-green-400'
+                                }`}
+                              >
+                                {Number(t.pnl) > 0 ? '+' : ''}${Number(t.pnl).toLocaleString()}
+                              </span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
       ) : !showConnect ? (
         <>
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
-              Мои активные счета ({accounts.length})
+              Мои активные счета ({activeAccounts.length})
             </h2>
             <span className="text-xs text-gray-500">
               Сброс дня через {timeToReset}
@@ -447,9 +609,9 @@ function App() {
 
           {loading ? (
             <p className="text-center text-gray-400 my-10">Загрузка ваших счетов...</p>
-          ) : accounts.length > 0 ? (
+          ) : activeAccounts.length > 0 ? (
             <div className="space-y-4 mb-6">
-              {accounts.map((acc) => {
+              {activeAccounts.map((acc) => {
                 const dailyPnl = Number(acc.current_daily_pnl || 0)
                 const maxLoss = Number(acc.max_daily_loss || 1)
                 const usedLoss = dailyPnl < 0 ? Math.abs(dailyPnl) : 0
@@ -473,19 +635,27 @@ function App() {
                       <span className="text-base font-bold text-cyan-400">
                         {acc.firm_name} • {acc.account_number}
                       </span>
-                      {isHardStopped ? (
-                        <span className="text-xs bg-red-500/20 text-red-400 font-bold px-2 py-0.5 rounded-full">
-                          ЗАБЛОКИРОВАН
-                        </span>
-                      ) : isWarning ? (
-                        <span className="text-xs bg-yellow-500/20 text-yellow-400 font-bold px-2 py-0.5 rounded-full">
-                          РИСК {drawdownPercent}%
-                        </span>
-                      ) : (
-                        <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">
-                          Активен
-                        </span>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {isHardStopped ? (
+                          <span className="text-xs bg-red-500/20 text-red-400 font-bold px-2 py-0.5 rounded-full">
+                            ЗАБЛОКИРОВАН
+                          </span>
+                        ) : isWarning ? (
+                          <span className="text-xs bg-yellow-500/20 text-yellow-400 font-bold px-2 py-0.5 rounded-full">
+                            РИСК {drawdownPercent}%
+                          </span>
+                        ) : (
+                          <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">
+                            Активен
+                          </span>
+                        )}
+                        <button
+                          onClick={() => setArchiveModalAccount(acc)}
+                          className="text-[11px] bg-gray-900 hover:bg-gray-700 border border-gray-700 text-gray-400 hover:text-white px-2 py-0.5 rounded-md transition-colors"
+                        >
+                          Завершить
+                        </button>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-3 gap-2 mb-3">
@@ -614,7 +784,7 @@ function App() {
             </div>
           ) : (
             <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 text-center mb-6">
-              <p className="text-gray-400 text-sm">У вас пока нет подключенных счетов</p>
+              <p className="text-gray-400 text-sm">У вас пока нет активных счетов</p>
             </div>
           )}
 
@@ -767,6 +937,47 @@ function App() {
             {saving ? 'Сохранение...' : 'Сохранить и Подключить'}
           </button>
         </form>
+      )}
+
+      {/* Модальное окно завершения счета (в историю) */}
+      {archiveModalAccount && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+          <div className="w-full max-w-sm bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-2xl">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="text-base font-bold text-white">
+                Перенести в историю
+              </h3>
+              <button
+                type="button"
+                onClick={() => setArchiveModalAccount(null)}
+                className="text-gray-400 text-xl"
+              >
+                &times;
+              </button>
+            </div>
+            <p className="text-xs text-gray-400 mb-4">
+              Счёт <span className="text-white font-semibold">{archiveModalAccount.firm_name} • {archiveModalAccount.account_number}</span> уйдёт с главного экрана и навсегда сохранится во вкладке «История». Выберите итог:
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={archiving}
+                onClick={() => handleArchiveAccount('blown')}
+                className="flex-1 bg-red-500/20 hover:bg-red-500/30 border border-red-500/50 text-red-400 font-bold py-2.5 rounded-xl text-sm transition-colors"
+              >
+                Слит
+              </button>
+              <button
+                type="button"
+                disabled={archiving}
+                onClick={() => handleArchiveAccount('passed')}
+                className="flex-1 bg-green-500/20 hover:bg-green-500/30 border border-green-500/50 text-green-400 font-bold py-2.5 rounded-xl text-sm transition-colors"
+              >
+                Пройден
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Модальное окно добавления сделки */}
