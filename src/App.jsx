@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from './supabaseClient'
 import './App.css'
+import NewsCalendar from './NewsCalendar'
 
 // Локальная дата устройства в формате YYYY-MM-DD
 function getLocalDateString() {
@@ -46,6 +47,7 @@ function App() {
   const [saving, setSaving] = useState(false)
   const [showConnect, setShowConnect] = useState(false)
   const [connectMethod, setConnectMethod] = useState('credentials')
+  const [activeTab, setActiveTab] = useState('accounts')
 
   // Форма добавления сделки
   const [tradeModalAccount, setTradeModalAccount] = useState(null)
@@ -400,7 +402,39 @@ function App() {
         </div>
       </div>
 
-      {!showConnect ? (
+      {/* Переключатель вкладок */}
+      <div className="flex bg-gray-800 p-1 rounded-xl border border-gray-700 mb-5">
+        <button
+          onClick={() => {
+            setActiveTab('accounts')
+            setShowConnect(false)
+          }}
+          className={`flex-1 py-2 text-sm font-bold rounded-lg transition-colors ${
+            activeTab === 'accounts'
+              ? 'bg-cyan-600 text-white'
+              : 'text-gray-400 hover:text-white'
+          }`}
+        >
+          Счета
+        </button>
+        <button
+          onClick={() => {
+            setActiveTab('news')
+            setShowConnect(false)
+          }}
+          className={`flex-1 py-2 text-sm font-bold rounded-lg transition-colors ${
+            activeTab === 'news'
+              ? 'bg-cyan-600 text-white'
+              : 'text-gray-400 hover:text-white'
+          }`}
+        >
+          Новости
+        </button>
+      </div>
+
+      {activeTab === 'news' ? (
+        <NewsCalendar />
+      ) : !showConnect ? (
         <>
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
