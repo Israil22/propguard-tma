@@ -33,7 +33,6 @@ function App() {
     fetchAccounts()
   }, [])
 
-  // Загружаем ВСЕ подключенные счета из Supabase
   async function fetchAccounts() {
     setLoading(true)
     const { data, error } = await supabase
@@ -49,7 +48,6 @@ function App() {
     setLoading(false)
   }
 
-  // Сохраняем новый счет и добавляем его в общий список
   async function handleSaveAccount(e) {
     e.preventDefault()
     setSaving(true)
@@ -172,7 +170,7 @@ function App() {
           </div>
 
           <div className="grid grid-cols-2 gap-3 mb-4">
-           <div className="col-span-2">
+            <div className="col-span-2">
               <label className="block text-xs text-gray-400 mb-1">Проп-фирма</label>
               <select
                 value={firmName}
@@ -183,7 +181,19 @@ function App() {
                 <option value="Apex">Apex Trader Funding</option>
                 <option value="FundedNext">FundedNext</option>
                 <option value="Topstep">Topstep</option>
+                <option value="custom">+ Другая (ввести вручную)</option>
               </select>
+
+              {firmName === 'custom' && (
+                <input
+                  type="text"
+                  value={customFirmName}
+                  onChange={(e) => setCustomFirmName(e.target.value)}
+                  placeholder="Название фирмы (например: The5ers, Upsckeyl)"
+                  required
+                  className="w-full mt-2 bg-gray-900 border border-cyan-500 rounded-lg p-2 text-white text-sm outline-none"
+                />
+              )}
             </div>
             <div>
               <label className="block text-xs text-gray-400 mb-1">Баланс ($)</label>
