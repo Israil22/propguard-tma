@@ -1,11 +1,35 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase } from './supabaseClient'
 import './App.css'
+
+// Локальная дата устройства в формате YYYY-MM-DD
+function getLocalDateString() {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+// Обратный отсчет до 00:00 по местному времени
+function getTimeUntilMidnight() {
+  const now = new Date()
+  const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0)
+  const diff = Math.max(0, midnight - now)
+  const h = String(Math.floor(diff / 3600000)).padStart(2, '0')
+  const m = String(Math.floor((diff % 3600000) / 60000)).padStart(2, '0')
+  const s = String(Math.floor((diff % 60000) / 1000)).padStart(2, '0')
+  return `${h}:${m}:${s}`
+}
 
 function App() {
   const [tgUser, setTgUser] = useState(null)
   const [webUser, setWebUser] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
+
+  // Таймер до полуночи
+  const [timeToReset, setTimeToReset] = useState(getTimeUntilMidnight())
+  const currentDateRef = useRef(getLocalDateString())
 
   // Авторизация
   const [isSignUp, setIsSignUp] = useState(false)
@@ -66,6 +90,22 @@ function App() {
     return () => subscription.unsubscribe()
   }, [])
 
+  // Секундный таймер + автосброс при наступлении 00:00
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTimeToReset(getTimeUntilMidnight())
+      const today = getLocalDateString()
+      if (today !== currentDateRef.current) {
+        currentDateRef.current = today
+        if (currentUserId) {
+          fetchAccounts(currentUserId)
+        }
+      }
+    }, 1000)
+
+    return () => clearInterval(interval)
+  }, [currentUserId])
+
   useEffect(() => {
     if (currentUserId) {
       fetchAccounts(currentUserId)
@@ -85,10 +125,36 @@ function App() {
 
     if (error) {
       console.error('Ошибка загрузки счетов:', error.message)
-    } else if (data) {
-      setAccounts(data)
-      if (data.length > 0) {
-        fetchTrades(data.map((a) => a.id))
+      setLoading(false)
+      return
+    }
+
+    if (data) {
+      const today = getLocalDateString()
+      const accountsToReset = data.filter((acc) => acc.last_reset_date !== today)
+
+      // Сбрасываем дневной PnL и блокировку для счетов, у которых наступил новый день
+      if (accountsToReset.length > 0) {
+        const idsToReset = accountsToReset.map((a) => a.id)
+        await supabase
+          .from('prop_accounts')
+          .update({
+            current_daily_pnl: 0,
+            is_locked: false,
+            last_reset_date: today
+          })
+          .in('id', idsToReset)
+      }
+
+      const normalizedAccounts = data.map((acc) =>
+        acc.last_reset_date !== today
+          ? { ...acc, current_daily_pnl: 0, is_locked: false, last_reset_date: today }
+          : acc
+      )
+
+      setAccounts(normalizedAccounts)
+      if (normalizedAccounts.length > 0) {
+        fetchTrades(normalizedAccounts.map((a) => a.id))
       }
     }
     setLoading(false)
@@ -154,7 +220,9 @@ function App() {
           firm_name: finalFirmName,
           initial_balance: Number(initialBalance) || 100000,
           max_daily_loss: Number(maxDailyLoss) || 5000,
-          current_daily_pnl: 0
+          current_daily_pnl: 0,
+          is_locked: false,
+          last_reset_date: getLocalDateString()
         }
       ])
       .select()
@@ -200,17 +268,23 @@ function App() {
     }
 
     const updatedDailyPnl = Number(tradeModalAccount.current_daily_pnl || 0) + pnlValue
+    const maxLoss = Number(tradeModalAccount.max_daily_loss || 0)
+    const shouldLock = updatedDailyPnl <= -maxLoss && maxLoss > 0
 
     const { error: accError } = await supabase
       .from('prop_accounts')
-      .update({ current_daily_pnl: updatedDailyPnl })
+      .update({
+        current_daily_pnl: updatedDailyPnl,
+        is_locked: shouldLock,
+        last_reset_date: getLocalDateString()
+      })
       .eq('id', tradeModalAccount.id)
 
     if (!accError) {
       setAccounts((prev) =>
         prev.map((acc) =>
           acc.id === tradeModalAccount.id
-            ? { ...acc, current_daily_pnl: updatedDailyPnl }
+            ? { ...acc, current_daily_pnl: updatedDailyPnl, is_locked: shouldLock }
             : acc
         )
       )
@@ -332,6 +406,9 @@ function App() {
             <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
               Мои активные счета ({accounts.length})
             </h2>
+            <span className="text-xs text-gray-500">
+              Сброс дня через {timeToReset}
+            </span>
           </div>
 
           {loading ? (
@@ -343,7 +420,7 @@ function App() {
                 const maxLoss = Number(acc.max_daily_loss || 1)
                 const usedLoss = dailyPnl < 0 ? Math.abs(dailyPnl) : 0
                 const drawdownPercent = Math.min(100, Math.round((usedLoss / maxLoss) * 100))
-                const isHardStopped = drawdownPercent >= 100
+                const isHardStopped = acc.is_locked || drawdownPercent >= 100
                 const isWarning = drawdownPercent >= 80 && !isHardStopped
                 const accTrades = tradesByAccount[acc.id] || []
 
@@ -352,7 +429,7 @@ function App() {
                     key={acc.id}
                     className={`bg-gray-800 p-4 rounded-xl border ${
                       isHardStopped
-                        ? 'border-red-500'
+                        ? 'border-red-500 shadow-lg shadow-red-500/10'
                         : isWarning
                         ? 'border-yellow-500'
                         : 'border-gray-700'
@@ -364,7 +441,7 @@ function App() {
                       </span>
                       {isHardStopped ? (
                         <span className="text-xs bg-red-500/20 text-red-400 font-bold px-2 py-0.5 rounded-full">
-                          СТОП-ТОРГИ
+                          ЗАБЛОКИРОВАН
                         </span>
                       ) : isWarning ? (
                         <span className="text-xs bg-yellow-500/20 text-yellow-400 font-bold px-2 py-0.5 rounded-full">
@@ -420,13 +497,30 @@ function App() {
                       </div>
                     </div>
 
+                    {/* Предупреждение о блокировке до 00:00 */}
+                    {isHardStopped && (
+                      <div className="mb-3 bg-red-500/10 border border-red-500/40 rounded-lg p-2.5 text-center">
+                        <p className="text-xs font-bold text-red-400">
+                          Дневной лимит пробит — торговля остановлена
+                        </p>
+                        <p className="text-[11px] text-gray-300 mt-0.5">
+                          Разблокировка в 00:00 (через <span className="font-mono font-bold text-white">{timeToReset}</span>)
+                        </p>
+                      </div>
+                    )}
+
                     {/* Кнопки действий по счету */}
                     <div className="flex gap-2">
                       <button
                         onClick={() => setTradeModalAccount(acc)}
-                        className="flex-1 bg-gray-700 hover:bg-gray-600 text-white text-xs font-semibold py-2 rounded-lg transition-colors"
+                        disabled={isHardStopped}
+                        className={`flex-1 text-xs font-semibold py-2 rounded-lg transition-colors ${
+                          isHardStopped
+                            ? 'bg-gray-900 text-gray-600 border border-gray-800 cursor-not-allowed'
+                            : 'bg-gray-700 hover:bg-gray-600 text-white'
+                        }`}
                       >
-                        + Сделка
+                        {isHardStopped ? 'Торговля запрещена' : '+ Сделка'}
                       </button>
                       <button
                         onClick={() =>
