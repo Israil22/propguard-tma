@@ -7,21 +7,31 @@ function App() {
   const [webUser, setWebUser] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
 
-  // Состояния формы входа/регистрации
+  // Авторизация
   const [isSignUp, setIsSignUp] = useState(false)
   const [email, setEmail] = useState('')
   const [authPassword, setAuthPassword] = useState('')
   const [authError, setAuthError] = useState('')
   const [authSubmitting, setAuthSubmitting] = useState(false)
 
-  // Состояния дашборда
+  // Счета и сделки
   const [accounts, setAccounts] = useState([])
+  const [tradesByAccount, setTradesByAccount] = useState({})
+  const [expandedAccountId, setExpandedAccountId] = useState(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [showConnect, setShowConnect] = useState(false)
   const [connectMethod, setConnectMethod] = useState('credentials')
 
-  // Поля формы подключения счета
+  // Форма добавления сделки
+  const [tradeModalAccount, setTradeModalAccount] = useState(null)
+  const [tradeSymbol, setTradeSymbol] = useState('XAUUSD')
+  const [tradeDirection, setTradeDirection] = useState('LONG')
+  const [tradePnl, setTradePnl] = useState('')
+  const [tradeNote, setTradeNote] = useState('')
+  const [savingTrade, setSavingTrade] = useState(false)
+
+  // Форма подключения счета
   const [firmName, setFirmName] = useState('FTMO')
   const [customFirmName, setCustomFirmName] = useState('')
   const [initialBalance, setInitialBalance] = useState('100000')
@@ -32,11 +42,9 @@ function App() {
   const [platform, setPlatform] = useState('cTrader')
   const [apiKey, setApiKey] = useState('')
 
-  // Определяем единый ID текущего пользователя (Telegram или Web)
   const currentUserId = tgUser ? `tg_${tgUser.id}` : webUser ? webUser.id : null
 
   useEffect(() => {
-    // 1. Проверяем, открыто ли приложение внутри Telegram
     const tg = window.Telegram?.WebApp
     if (tg?.initDataUnsafe?.user) {
       tg.ready()
@@ -46,7 +54,6 @@ function App() {
       return
     }
 
-    // 2. Если это обычный браузер — проверяем сессию Supabase Auth
     supabase.auth.getSession().then(({ data: { session } }) => {
       setWebUser(session?.user ?? null)
       setAuthLoading(false)
@@ -59,12 +66,12 @@ function App() {
     return () => subscription.unsubscribe()
   }, [])
 
-  // Загружаем счета, как только определился пользователь
   useEffect(() => {
     if (currentUserId) {
       fetchAccounts(currentUserId)
     } else {
       setAccounts([])
+      setTradesByAccount({})
     }
   }, [currentUserId])
 
@@ -77,39 +84,52 @@ function App() {
       .order('created_at', { ascending: false })
 
     if (error) {
-      console.error('Ошибка загрузки:', error.message)
+      console.error('Ошибка загрузки счетов:', error.message)
     } else if (data) {
       setAccounts(data)
+      if (data.length > 0) {
+        fetchTrades(data.map((a) => a.id))
+      }
     }
     setLoading(false)
   }
 
-  // Вход или регистрация для веб-версии
+  async function fetchTrades(accountIds) {
+    const { data, error } = await supabase
+      .from('trade_logs')
+      .select('*')
+      .in('account_id', accountIds)
+      .order('created_at', { ascending: false })
+
+    if (!error && data) {
+      const grouped = {}
+      data.forEach((t) => {
+        if (!grouped[t.account_id]) grouped[t.account_id] = []
+        grouped[t.account_id].push(t)
+      })
+      setTradesByAccount(grouped)
+    }
+  }
+
   async function handleAuth(e) {
     e.preventDefault()
     setAuthError('')
     setAuthSubmitting(true)
 
     if (isSignUp) {
-      const { error } = await supabase.auth.signUp({
-        email,
-        password: authPassword
-      })
+      const { error } = await supabase.auth.signUp({ email, password: authPassword })
       if (error) setAuthError(error.message)
     } else {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password: authPassword
-      })
+      const { error } = await supabase.auth.signInWithPassword({ email, password: authPassword })
       if (error) setAuthError('Неверный email или пароль')
     }
-
     setAuthSubmitting(false)
   }
 
   async function handleLogout() {
     await supabase.auth.signOut()
     setAccounts([])
+    setTradesByAccount({})
   }
 
   async function handleSaveAccount(e) {
@@ -153,7 +173,62 @@ function App() {
     }
   }
 
-  // Экран загрузки при старте
+  async function handleSaveTrade(e) {
+    e.preventDefault()
+    if (!tradeModalAccount) return
+    setSavingTrade(true)
+
+    const pnlValue = Number(tradePnl) || 0
+
+    const { data: newTrade, error: tradeError } = await supabase
+      .from('trade_logs')
+      .insert([
+        {
+          account_id: tradeModalAccount.id,
+          symbol: tradeSymbol.trim().toUpperCase() || 'XAUUSD',
+          direction: tradeDirection,
+          pnl: pnlValue,
+          note: tradeNote.trim()
+        }
+      ])
+      .select()
+
+    if (tradeError) {
+      alert('Ошибка сохранения сделки: ' + tradeError.message)
+      setSavingTrade(false)
+      return
+    }
+
+    const updatedDailyPnl = Number(tradeModalAccount.current_daily_pnl || 0) + pnlValue
+
+    const { error: accError } = await supabase
+      .from('prop_accounts')
+      .update({ current_daily_pnl: updatedDailyPnl })
+      .eq('id', tradeModalAccount.id)
+
+    if (!accError) {
+      setAccounts((prev) =>
+        prev.map((acc) =>
+          acc.id === tradeModalAccount.id
+            ? { ...acc, current_daily_pnl: updatedDailyPnl }
+            : acc
+        )
+      )
+      if (newTrade && newTrade.length > 0) {
+        setTradesByAccount((prev) => ({
+          ...prev,
+          [tradeModalAccount.id]: [newTrade[0], ...(prev[tradeModalAccount.id] || [])]
+        }))
+      }
+      setExpandedAccountId(tradeModalAccount.id)
+      setTradeModalAccount(null)
+      setTradePnl('')
+      setTradeNote('')
+    }
+
+    setSavingTrade(false)
+  }
+
   if (authLoading) {
     return (
       <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center font-sans">
@@ -162,7 +237,6 @@ function App() {
     )
   }
 
-  // Экран входа/регистрации для обычного браузера (если не авторизован)
   if (!currentUserId) {
     return (
       <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center p-4 font-sans">
@@ -230,7 +304,6 @@ function App() {
     )
   }
 
-  // Основной дашборд (для авторизованных в Web или Telegram)
   return (
     <div className="p-4 bg-gray-900 min-h-screen text-white font-sans">
       <div className="flex justify-between items-center mb-6">
@@ -265,42 +338,151 @@ function App() {
             <p className="text-center text-gray-400 my-10">Загрузка ваших счетов...</p>
           ) : accounts.length > 0 ? (
             <div className="space-y-4 mb-6">
-              {accounts.map((acc) => (
-                <div
-                  key={acc.id}
-                  className="bg-gray-800 p-4 rounded-xl border border-gray-700"
-                >
-                  <div className="flex justify-between items-center mb-3 pb-2 border-b border-gray-700">
-                    <span className="text-base font-bold text-cyan-400">
-                      {acc.firm_name} • {acc.account_number}
-                    </span>
-                    <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">
-                      Активен
-                    </span>
-                  </div>
+              {accounts.map((acc) => {
+                const dailyPnl = Number(acc.current_daily_pnl || 0)
+                const maxLoss = Number(acc.max_daily_loss || 1)
+                const usedLoss = dailyPnl < 0 ? Math.abs(dailyPnl) : 0
+                const drawdownPercent = Math.min(100, Math.round((usedLoss / maxLoss) * 100))
+                const isHardStopped = drawdownPercent >= 100
+                const isWarning = drawdownPercent >= 80 && !isHardStopped
+                const accTrades = tradesByAccount[acc.id] || []
 
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <p className="text-gray-400 text-xs mb-0.5">Баланс</p>
-                      <p className="text-sm font-bold text-white">
-                        ${Number(acc.initial_balance).toLocaleString()}
-                      </p>
+                return (
+                  <div
+                    key={acc.id}
+                    className={`bg-gray-800 p-4 rounded-xl border ${
+                      isHardStopped
+                        ? 'border-red-500'
+                        : isWarning
+                        ? 'border-yellow-500'
+                        : 'border-gray-700'
+                    }`}
+                  >
+                    <div className="flex justify-between items-center mb-3 pb-2 border-b border-gray-700">
+                      <span className="text-base font-bold text-cyan-400">
+                        {acc.firm_name} • {acc.account_number}
+                      </span>
+                      {isHardStopped ? (
+                        <span className="text-xs bg-red-500/20 text-red-400 font-bold px-2 py-0.5 rounded-full">
+                          СТОП-ТОРГИ
+                        </span>
+                      ) : isWarning ? (
+                        <span className="text-xs bg-yellow-500/20 text-yellow-400 font-bold px-2 py-0.5 rounded-full">
+                          РИСК {drawdownPercent}%
+                        </span>
+                      ) : (
+                        <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">
+                          Активен
+                        </span>
+                      )}
                     </div>
-                    <div>
-                      <p className="text-gray-400 text-xs mb-0.5">Дневной PnL</p>
-                      <p className={`text-sm font-bold ${Number(acc.current_daily_pnl) < 0 ? 'text-red-500' : 'text-green-400'}`}>
-                        ${Number(acc.current_daily_pnl).toLocaleString()}
-                      </p>
+
+                    <div className="grid grid-cols-3 gap-2 mb-3">
+                      <div>
+                        <p className="text-gray-400 text-xs mb-0.5">Баланс</p>
+                        <p className="text-sm font-bold text-white">
+                          ${Number(acc.initial_balance).toLocaleString()}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-gray-400 text-xs mb-0.5">Дневной PnL</p>
+                        <p className={`text-sm font-bold ${dailyPnl < 0 ? 'text-red-500' : 'text-green-400'}`}>
+                          {dailyPnl > 0 ? '+' : ''}${dailyPnl.toLocaleString()}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-gray-400 text-xs mb-0.5">Лимит/день</p>
+                        <p className="text-sm font-bold text-orange-400">
+                          -${maxLoss.toLocaleString()}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-gray-400 text-xs mb-0.5">Лимит/день</p>
-                      <p className="text-sm font-bold text-orange-400">
-                        -${Number(acc.max_daily_loss).toLocaleString()}
-                      </p>
+
+                    {/* Шкала дневной просадки */}
+                    <div className="mb-3">
+                      <div className="flex justify-between text-[11px] text-gray-400 mb-1">
+                        <span>Использовано дневного лимита</span>
+                        <span className={isHardStopped ? 'text-red-400 font-bold' : ''}>
+                          {drawdownPercent}%
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-900 rounded-full h-2 overflow-hidden">
+                        <div
+                          className={`h-2 rounded-full transition-all ${
+                            isHardStopped
+                              ? 'bg-red-500'
+                              : isWarning
+                              ? 'bg-yellow-500'
+                              : 'bg-cyan-500'
+                          }`}
+                          style={{ width: `${drawdownPercent}%` }}
+                        />
+                      </div>
                     </div>
+
+                    {/* Кнопки действий по счету */}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setTradeModalAccount(acc)}
+                        className="flex-1 bg-gray-700 hover:bg-gray-600 text-white text-xs font-semibold py-2 rounded-lg transition-colors"
+                      >
+                        + Сделка
+                      </button>
+                      <button
+                        onClick={() =>
+                          setExpandedAccountId(expandedAccountId === acc.id ? null : acc.id)
+                        }
+                        className="flex-1 bg-gray-900 hover:bg-gray-700 border border-gray-700 text-gray-300 text-xs font-semibold py-2 rounded-lg transition-colors"
+                      >
+                        История ({accTrades.length})
+                      </button>
+                    </div>
+
+                    {/* Раскрывающийся список сделок */}
+                    {expandedAccountId === acc.id && (
+                      <div className="mt-3 pt-3 border-t border-gray-700 space-y-2">
+                        {accTrades.length === 0 ? (
+                          <p className="text-xs text-gray-500 text-center py-2">
+                            Сделок пока нет
+                          </p>
+                        ) : (
+                          accTrades.map((t) => (
+                            <div
+                              key={t.id}
+                              className="flex justify-between items-center bg-gray-900/70 p-2.5 rounded-lg text-xs"
+                            >
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-white">{t.symbol}</span>
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                      t.direction === 'LONG'
+                                        ? 'bg-green-500/20 text-green-400'
+                                        : 'bg-red-500/20 text-red-400'
+                                    }`}
+                                  >
+                                    {t.direction}
+                                  </span>
+                                </div>
+                                {t.note && (
+                                  <p className="text-gray-400 text-[11px] mt-0.5">{t.note}</p>
+                                )}
+                              </div>
+                              <span
+                                className={`font-bold text-sm ${
+                                  Number(t.pnl) < 0 ? 'text-red-400' : 'text-green-400'
+                                }`}
+                              >
+                                {Number(t.pnl) > 0 ? '+' : ''}${Number(t.pnl).toLocaleString()}
+                              </span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           ) : (
             <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 text-center mb-6">
@@ -457,6 +639,102 @@ function App() {
             {saving ? 'Сохранение...' : 'Сохранить и Подключить'}
           </button>
         </form>
+      )}
+
+      {/* Модальное окно добавления сделки */}
+      {tradeModalAccount && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+          <form
+            onSubmit={handleSaveTrade}
+            className="w-full max-w-sm bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-2xl"
+          >
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-base font-bold text-white">
+                Новая сделка • {tradeModalAccount.firm_name}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setTradeModalAccount(null)}
+                className="text-gray-400 text-xl"
+              >
+                &times;
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Инструмент</label>
+                <input
+                  type="text"
+                  value={tradeSymbol}
+                  onChange={(e) => setTradeSymbol(e.target.value)}
+                  placeholder="XAUUSD, NAS100, BTCUSDT"
+                  required
+                  className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm outline-none focus:border-cyan-500"
+                />
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTradeDirection('LONG')}
+                  className={`flex-1 py-2 rounded-lg text-xs font-bold border ${
+                    tradeDirection === 'LONG'
+                      ? 'bg-green-500/20 border-green-500 text-green-400'
+                      : 'bg-gray-900 border-gray-700 text-gray-400'
+                  }`}
+                >
+                  LONG
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTradeDirection('SHORT')}
+                  className={`flex-1 py-2 rounded-lg text-xs font-bold border ${
+                    tradeDirection === 'SHORT'
+                      ? 'bg-red-500/20 border-red-500 text-red-400'
+                      : 'bg-gray-900 border-gray-700 text-gray-400'
+                  }`}
+                >
+                  SHORT
+                </button>
+              </div>
+
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">
+                  Результат PnL ($) — с минусом если убыток
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  value={tradePnl}
+                  onChange={(e) => setTradePnl(e.target.value)}
+                  placeholder="Например: -250 или 450"
+                  required
+                  className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm outline-none focus:border-cyan-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Заметка / Сетап (необязательно)</label>
+                <input
+                  type="text"
+                  value={tradeNote}
+                  onChange={(e) => setTradeNote(e.target.value)}
+                  placeholder="Например: FVG 15m, вход по тренду"
+                  className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2.5 text-white text-sm outline-none focus:border-cyan-500"
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={savingTrade}
+              className="w-full mt-5 bg-orange-500 hover:bg-orange-600 disabled:bg-gray-600 text-white font-bold py-2.5 rounded-xl transition-colors"
+            >
+              {savingTrade ? 'Сохранение...' : 'Записать сделку'}
+            </button>
+          </form>
+        </div>
       )}
     </div>
   )
