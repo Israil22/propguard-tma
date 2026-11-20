@@ -268,5 +268,17 @@ function App() {
             </div>
           )}
 
-          <button
+         <button
             type="submit"
+            disabled={saving}
+            className="w-full mt-6 bg-orange-500 active:bg-orange-600 disabled:bg-gray-600 text-white font-bold py-3 rounded-xl transition-colors"
+          >
+            {saving ? 'Сохранение...' : 'Сохранить и Подключить'}
+          </button>
+        </form>
+      )}
+    </div>
+  )
+}
+
+export default App
